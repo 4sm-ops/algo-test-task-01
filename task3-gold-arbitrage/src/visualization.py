@@ -386,14 +386,17 @@ def plot_strategy_dashboard(
         height=900,
         showlegend=True,
         legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="center",
-            x=0.5,
+            orientation="v",
+            yanchor="top",
+            y=0.99,
+            xanchor="right",
+            x=0.99,
+            bgcolor="rgba(255, 255, 255, 0.9)",
+            bordercolor="#DDDDDD",
+            borderwidth=1,
         ),
         hovermode="x unified",
-        margin=dict(l=60, r=40, t=120, b=40),
+        margin=dict(l=60, r=120, t=120, b=40),
     )
 
     # Update all axes
