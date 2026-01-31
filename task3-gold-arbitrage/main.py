@@ -40,7 +40,7 @@ def print_data_summary(summary: dict) -> None:
     print(f"MOEX avg spread:   {summary['moex_avg_spread']:.2f}")
 
 
-def print_backtest_results(result: BacktestResult) -> None:
+def print_backtest_results(result: BacktestResult, config: StrategyConfig) -> None:
     """Print backtest results."""
     print_section("BACKTEST RESULTS")
     print(f"Number of trades:  {result.num_trades}")
@@ -52,6 +52,8 @@ def print_backtest_results(result: BacktestResult) -> None:
     print(f"Max drawdown:      {result.max_drawdown:.2f}")
     print(f"Sharpe ratio:      {result.sharpe_ratio:.2f}")
     print(f"Profit factor:     {result.profit_factor:.2f}")
+    print(f"Margin per trade:  ${config.margin_b3 + config.margin_moex:.0f} (B3: ${config.margin_b3:.0f} + MOEX: ${config.margin_moex:.0f})")
+    print(f"ROI on margin:     {result.roi_on_margin:.1f}%")
 
 
 def print_trade_list(trades: list, max_trades: int = 20) -> None:
@@ -103,25 +105,26 @@ def plot_results(
     ax1.legend()
     ax1.grid(True, alpha=0.3)
 
-    # 2. Spread
+    # 2. Spreads (tradeable)
     ax2 = axes[1]
-    ax2.plot(plot_df["ts"], plot_df["spread"], color="purple", alpha=0.8)
+    ax2.plot(plot_df["ts"], plot_df["spread_long"], label="Spread Long (ask_b3 - bid_moex)", color="blue", alpha=0.7)
+    ax2.plot(plot_df["ts"], plot_df["spread_short"], label="Spread Short (bid_b3 - ask_moex)", color="red", alpha=0.7)
     ax2.axhline(y=0, color="black", linestyle="--", alpha=0.5)
     ax2.set_ylabel("Spread (B3 - MOEX)")
-    ax2.set_title("Price Spread")
+    ax2.set_title("Tradeable Spreads")
+    ax2.legend()
     ax2.grid(True, alpha=0.3)
 
-    # 3. Z-score with entry/exit thresholds
+    # 3. Z-scores with entry/exit thresholds
     ax3 = axes[2]
-    ax3.plot(plot_df["ts"], plot_df["zscore"], color="blue", alpha=0.8)
-    ax3.axhline(y=config.entry_threshold, color="red", linestyle="--", label=f"Entry ({config.entry_threshold})")
-    ax3.axhline(y=-config.entry_threshold, color="red", linestyle="--")
-    ax3.axhline(y=config.exit_threshold, color="green", linestyle=":", label=f"Exit ({config.exit_threshold})")
-    ax3.axhline(y=-config.exit_threshold, color="green", linestyle=":")
+    ax3.plot(plot_df["ts"], plot_df["zscore_long"], label="Z-score Long", color="blue", alpha=0.7)
+    ax3.plot(plot_df["ts"], plot_df["zscore_short"], label="Z-score Short", color="red", alpha=0.7)
+    ax3.axhline(y=config.entry_threshold, color="green", linestyle="--", label=f"Entry SHORT ({config.entry_threshold})")
+    ax3.axhline(y=-config.entry_threshold, color="orange", linestyle="--", label=f"Entry LONG (-{config.entry_threshold})")
     ax3.axhline(y=0, color="black", linestyle="-", alpha=0.3)
     ax3.set_ylabel("Z-score")
-    ax3.set_title("Spread Z-score")
-    ax3.legend()
+    ax3.set_title("Spread Z-scores")
+    ax3.legend(loc="upper right", fontsize=8)
     ax3.grid(True, alpha=0.3)
 
     # 4. Equity curve
@@ -201,7 +204,7 @@ def save_summary_report(
         f.write(f"- Exit threshold: {config.exit_threshold} σ\n")
         f.write(f"- Stop loss: {config.stop_loss_threshold} σ\n")
         f.write(f"- Z-score window: {config.zscore_window} ticks\n")
-        f.write(f"- Commission: {config.commission_pct:.4%}\n\n")
+        f.write(f"- Commission: {config.commission_per_contract:.2f} BRL/contract\n\n")
 
         f.write("## Data Summary\n\n")
         f.write(f"- Total rows: {summary['total_rows']:,}\n")
@@ -220,7 +223,9 @@ def save_summary_report(
         f.write(f"| Avg trade PnL | {result.avg_trade_pnl:.2f} |\n")
         f.write(f"| Max drawdown | {result.max_drawdown:.2f} |\n")
         f.write(f"| Sharpe ratio | {result.sharpe_ratio:.2f} |\n")
-        f.write(f"| Profit factor | {result.profit_factor:.2f} |\n\n")
+        f.write(f"| Profit factor | {result.profit_factor:.2f} |\n")
+        f.write(f"| Margin per trade | ${config.margin_b3 + config.margin_moex:.0f} |\n")
+        f.write(f"| ROI on margin | {result.roi_on_margin:.1f}% |\n\n")
 
         f.write("## Charts\n\n")
         f.write("![Backtest Results](backtest_results.png)\n")
@@ -269,25 +274,29 @@ def main():
     # Add indicators
     print_section("CALCULATING INDICATORS")
     df = add_indicators(df, window=DEFAULT_STRATEGY_CONFIG.zscore_window)
-    valid_rows = df["zscore"].notna().sum()
+    valid_rows = df["zscore_long"].notna().sum()
     print(f"Z-score window: {DEFAULT_STRATEGY_CONFIG.zscore_window}")
     print(f"Valid rows with indicators: {valid_rows:,}")
 
     # Run backtest
     print_section("RUNNING BACKTEST")
+    print(f"B3 latency: {DEFAULT_STRATEGY_CONFIG.b3_latency_ms} ms")
     backtest = Backtest(
         entry_threshold=DEFAULT_STRATEGY_CONFIG.entry_threshold,
         exit_threshold=DEFAULT_STRATEGY_CONFIG.exit_threshold,
         stop_loss_threshold=DEFAULT_STRATEGY_CONFIG.stop_loss_threshold,
-        commission_pct=DEFAULT_STRATEGY_CONFIG.commission_pct,
+        commission_per_contract=DEFAULT_STRATEGY_CONFIG.commission_per_contract,
         position_size=DEFAULT_STRATEGY_CONFIG.position_size,
         min_liquidity=DEFAULT_STRATEGY_CONFIG.min_liquidity,
+        b3_latency_ms=DEFAULT_STRATEGY_CONFIG.b3_latency_ms,
+        margin_b3=DEFAULT_STRATEGY_CONFIG.margin_b3,
+        margin_moex=DEFAULT_STRATEGY_CONFIG.margin_moex,
     )
 
     result = backtest.run(df)
 
     # Print results
-    print_backtest_results(result)
+    print_backtest_results(result, DEFAULT_STRATEGY_CONFIG)
     print_trade_list(result.trades)
 
     # Generate outputs
@@ -304,6 +313,9 @@ def main():
         "sharpe_ratio": result.sharpe_ratio,
         "max_drawdown": result.max_drawdown,
         "profit_factor": result.profit_factor,
+        "calmar_ratio": result.calmar_ratio,
+        "var_95": result.var_95,
+        "roi_on_margin": result.roi_on_margin,
     }
 
     plot_equity_plotly(

@@ -22,11 +22,18 @@ class StrategyConfig:
     position_size: int = 1  # Contracts per leg
 
     # Costs
-    commission_pct: float = 0.0001  # 0.01% per trade
+    commission_per_contract: float = 0.10  # 10 centavos BRL per contract
 
     # Risk management
     max_positions: int = 1
     min_liquidity: float = 1.0  # Minimum qty on bid/ask
+
+    # Latency
+    b3_latency_ms: int = 250  # B3 leg execution delay in milliseconds (MOEX is instant)
+
+    # Margin (in USD)
+    margin_b3: float = 217.0  # Margin per B3 contract (~1300 BRL)
+    margin_moex: float = 300.0  # Margin per MOEX contract (~30,000 RUB)
 
 
 @dataclass

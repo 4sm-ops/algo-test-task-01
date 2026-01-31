@@ -15,13 +15,17 @@
 | Параметр | Допущение | Комментарий |
 |----------|-----------|-------------|
 | Базовый актив | Оба фьючерса привязаны к золоту | Разные биржи, но один underlying |
-| Валюта расчётов | USD-эквивалент | Упрощение: игнорируем BRL/RUB конвертацию |
+| Валюта расчётов | PnL в пунктах спреда, маржа в USD | Упрощение: игнорируем BRL/RUB конвертацию |
 | Данные | Top-of-book (лучший bid/ask) | Структура CSV |
 | Дубликаты в данных | Удаляем | Технический артефакт |
 | Таймзона | UTC | Стандарт |
-| Размер позиции | 1 контракт на каждой ноге | Для демонстрации |
-| Комиссии | 0.01% от notional на каждую сделку | Консервативная оценка |
+| Размер позиции | 1 контракт на каждой ноге | Market-neutral |
+| Комиссии | **0.10 BRL за контракт** | Фиксированная комиссия |
 | Slippage | Пересечение спреда (cross spread) | Worst-case execution |
+| Latency B3 | **250 мс** | MOEX — мгновенно |
+| ГО (маржа) | B3: $217, MOEX: $300 | Итого $517 на сделку |
+| Время удержания | Без ограничений | Держим до сигнала выхода |
+| Margin call | Не моделируется | Только initial margin check |
 
 ---
 
@@ -47,35 +51,44 @@
 
 ## 4. Логика стратегии
 
-### 4.1 Расчёт спреда
+### 4.1 Расчёт спреда (по tradeable ценам)
 
-```
-mid_b3 = (bid_b3 + ask_b3) / 2
-mid_moex = (bid_moex + ask_moex) / 2
+**Важно:** Используем bid/ask цены, а не mid — по mid-ценам реально купить невозможно.
 
-spread = mid_b3 - mid_moex
+```python
+# Для LONG спреда (покупаем B3, продаём MOEX):
+spread_long = ask_b3 - bid_moex
+
+# Для SHORT спреда (продаём B3, покупаем MOEX):
+spread_short = bid_b3 - ask_moex
 ```
+
+Каждое направление имеет свой Z-score: `zscore_long` и `zscore_short`.
 
 ### 4.2 Нормализация спреда (Z-score)
 
-```
-z_score = (spread - rolling_mean(spread, N)) / rolling_std(spread, N)
+```python
+zscore_long = (spread_long - rolling_mean(spread_long, N)) / rolling_std(spread_long, N)
+zscore_short = (spread_short - rolling_mean(spread_short, N)) / rolling_std(spread_short, N)
 ```
 
-Где `N` — окно расчёта (например, 1000 тиков или 5 минут).
+Где `N = 1000` тиков — окно расчёта.
 
 ### 4.3 Торговые сигналы
 
 | Условие | Действие |
 |---------|----------|
-| `z_score > +threshold` | **SELL B3, BUY MOEX** (спред расширился, ждём сужения) |
-| `z_score < -threshold` | **BUY B3, SELL MOEX** (спред сузился, ждём расширения) |
-| `abs(z_score) < exit_threshold` | **Закрыть позицию** (спред вернулся к среднему) |
+| `zscore_short > +2.0` | **SHORT SPREAD**: Sell B3 @ bid, Buy MOEX @ ask |
+| `zscore_long < -2.0` | **LONG SPREAD**: Buy B3 @ ask, Sell MOEX @ bid |
+| `zscore_long > -0.5` (для LONG) | **Закрыть LONG** (спред вернулся к среднему) |
+| `zscore_short < +0.5` (для SHORT) | **Закрыть SHORT** (спред вернулся к среднему) |
+| `abs(zscore) > 4.0` | **Stop-loss** |
 
 **Параметры по умолчанию:**
-- `threshold = 2.0` (2 стандартных отклонения)
-- `exit_threshold = 0.5`
-- `N = 1000` тиков
+- `entry_threshold = 2.0` σ
+- `exit_threshold = 0.5` σ
+- `stop_loss_threshold = 4.0` σ
+- `zscore_window = 1000` тиков
 
 ---
 
@@ -143,7 +156,7 @@ IF abs(z_score) > 4.0:
 | Model risk | Спред не возвращается к среднему | Stop-loss на 4σ |
 | Liquidity risk | Недостаточная ликвидность | Фильтр по qty |
 | Currency risk | Движение BRL/RUB | В данной версии игнорируется |
-| Latency risk | Задержка между биржами | Учитывать в реальной торговле |
+| Latency risk | Задержка между биржами | **Смоделировано**: B3 = 250 мс, MOEX = 0 мс |
 
 ---
 
@@ -160,6 +173,9 @@ IF abs(z_score) > 4.0:
 | **Sharpe Ratio** | Risk-adjusted return (annualized) |
 | **Max Drawdown** | Максимальная просадка |
 | **Profit Factor** | Gross profit / Gross loss |
+| **Calmar Ratio** | Annualized return / Max Drawdown |
+| **VaR 95%** | 5-й перцентиль PnL по сделкам |
+| **ROI on Margin** | Net PnL / Margin * 100% |
 
 ---
 
@@ -168,18 +184,25 @@ IF abs(z_score) > 4.0:
 ### Текущие ограничения
 
 1. **Упрощённая модель валют** — не учитываем реальную конвертацию BRL/RUB/USD
-2. **Синхронизация данных** — предполагаем мгновенное исполнение
-3. **Размер контракта** — не учтён реальный notional value
-4. **Маржинальные требования** — не смоделированы
+2. **Размер контракта** — не учтён реальный notional value
+3. **Margin call** — не моделируется (только initial margin check)
+
+### Выполненные шаги
+
+1. [x] Загрузка и очистка данных из CSV
+2. [x] Расчёт спреда по tradeable ценам (bid/ask)
+3. [x] Dual Z-score (zscore_long, zscore_short)
+4. [x] Реализация бэктеста с latency (B3: 250 мс)
+5. [x] Фиксированная комиссия (0.10 BRL/контракт)
+6. [x] Моделирование маржи (ГО): B3 $217 + MOEX $300
+7. [x] Метрики: Calmar, VaR 95%, ROI on margin
+8. [x] Визуализация (Plotly dashboards)
 
 ### Следующие шаги
 
-1. [x] Загрузка и очистка данных из CSV
-2. [x] Расчёт спреда и z-score
-3. [x] Реализация бэктеста
-4. [x] Визуализация результатов
-5. [ ] Оптимизация параметров (threshold, window)
-6. [ ] Анализ чувствительности к комиссиям
+1. [ ] Оптимизация параметров (threshold, window)
+2. [ ] Анализ чувствительности к комиссиям
+3. [ ] Фильтр по ширине спреда B3
 
 ---
 
@@ -220,7 +243,9 @@ python main.py
 Dataclass-конфигурация с параметрами стратегии:
 - `entry_threshold`, `exit_threshold`, `stop_loss_threshold` — пороги Z-score
 - `zscore_window` — окно расчёта
-- `commission_pct` — комиссия
+- `commission_per_contract` — комиссия (0.10 BRL)
+- `b3_latency_ms` — задержка исполнения B3 (250 мс)
+- `margin_b3`, `margin_moex` — маржинальные требования в USD
 - `symbol_b3`, `symbol_moex` — тикеры инструментов
 
 #### src/data_loader.py
@@ -229,17 +254,23 @@ Dataclass-конфигурация с параметрами стратегии:
 - `get_data_summary()` — статистика по данным
 
 #### src/indicators.py
-- `calculate_spread()` — разница mid-price B3 и MOEX
-- `calculate_zscore()` — rolling Z-score с заданным окном
+- `calculate_tradeable_spreads()` — spread_long и spread_short по bid/ask
+- `calculate_zscore_dual()` — rolling Z-score для обоих направлений
+- `add_indicators()` — добавление всех индикаторов в DataFrame
 
 #### src/backtest.py
 - `Backtest` класс — движок симуляции с поддержкой:
   - Открытие/закрытие позиций по сигналам
-  - Учёт комиссий
-  - Stop-loss
+  - **Latency моделирование**: MOEX мгновенно, B3 через 250 мс
+  - Фиксированная комиссия (0.10 BRL/контракт)
+  - Stop-loss на 4σ
   - Проверка ликвидности
-- `BacktestResult` — метрики (PnL, Sharpe, drawdown, profit factor)
+- `BacktestResult` — метрики (PnL, Sharpe, Calmar, VaR, ROI on margin)
 - `Trade`, `Position` — структуры данных
+
+#### src/visualization.py
+- `plot_equity_plotly()` — интерактивная кривая капитала
+- `plot_strategy_dashboard()` — комплексный дашборд (цены, спреды, Z-score, equity)
 
 #### main.py
 - Загрузка данных
@@ -259,7 +290,10 @@ Dataclass-конфигурация с параметрами стратегии:
 | Exit threshold | 0.5 σ |
 | Stop loss | 4.0 σ |
 | Z-score window | 1000 ticks |
-| Commission | 0.01% |
+| Commission | **0.10 BRL/контракт** |
+| B3 latency | **250 мс** |
+| Margin B3 | **$217** (~1,300 BRL) |
+| Margin MOEX | **$300** (~30,000 ₽) |
 
 ### 10.2 Данные
 
@@ -267,38 +301,47 @@ Dataclass-конфигурация с параметрами стратегии:
 |---------|----------|
 | Период | 2025-11-24 — 2025-12-09 |
 | Всего строк | 498,188 |
-| B3 avg spread | **26.34** |
-| MOEX avg spread | **2.22** |
+| B3 avg spread | **26.34** пунктов |
+| MOEX avg spread | **2.22** пункта |
 
-### 10.3 Результаты
+### 10.3 Результаты (с учётом latency и маржи)
 
 | Метрика | Значение |
 |---------|----------|
-| Количество сделок | 2,860 |
-| Win rate | 1.3% |
-| Total PnL | -77,523 |
-| Total commission | 4,834 |
-| **Net PnL** | **-82,357** |
-| Max drawdown | 82,357 |
-| Sharpe ratio | -21.30 |
+| Количество сделок | 1,590 |
+| Win rate | 0.9% |
+| Total PnL | -41,416 |
+| Total commission | 636 |
+| **Net PnL** | **-42,052** |
+| Max drawdown | 42,052 |
+| Sharpe ratio | -20.84 |
 | Profit factor | 0.00 |
+| Calmar ratio | -0.50 |
+| VaR 95% | -75 |
+| Margin per trade | **$517** |
+| **ROI on margin** | **-8,134%** |
 
 ### 10.4 Анализ результатов
 
 **Стратегия убыточна.** Основные причины:
 
 1. **Огромный спред на B3** (~26 пунктов vs ~2 на MOEX)
-   - При каждой сделке теряем ~24 пункта на входе/выходе
+   - При каждой сделке теряем на crossing the spread
    - Mean-reversion не компенсирует эти потери
+   - Средний убыток на сделку: **-26.45 пунктов**
 
-2. **Асимметрия ликвидности**
+2. **Latency B3** (250 мс)
+   - Дополнительный slippage при исполнении
+   - Цена B3 меняется между сигналом и исполнением
+
+3. **Асимметрия ликвидности**
    - MOEX: узкий спред, высокая ликвидность
    - B3: широкий спред, низкая ликвидность
-   - Арбитраж работает только при сопоставимой ликвидности
+   - Арбитраж требует сопоставимой ликвидности
 
-3. **Высокая частота сделок**
-   - 2,860 сделок за ~2 недели
-   - Каждая сделка несёт издержки на спред
+4. **ROI on margin: -8,134%**
+   - Потеря превышает маржу в 81 раз
+   - Полное уничтожение капитала
 
 ### 10.5 Рекомендации по улучшению
 

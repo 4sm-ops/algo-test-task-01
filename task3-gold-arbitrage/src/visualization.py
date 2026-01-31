@@ -104,7 +104,7 @@ def plot_equity_plotly(
         f"Exit: ±{config.exit_threshold}σ | "
         f"Stop: ±{config.stop_loss_threshold}σ<br>"
         f"Window: {config.zscore_window} ticks | "
-        f"Commission: {config.commission_pct:.2%}"
+        f"Commission: {config.commission_per_contract:.2f} BRL/contract"
     )
 
     # Results annotation
@@ -114,8 +114,11 @@ def plot_equity_plotly(
         f"Trades: {result_metrics.get('num_trades', 0)} | "
         f"Win Rate: {result_metrics.get('win_rate', 0):.1%}<br>"
         f"Sharpe: {result_metrics.get('sharpe_ratio', 0):.2f} | "
+        f"Calmar: {result_metrics.get('calmar_ratio', 0):.2f} | "
+        f"VaR 95%: {result_metrics.get('var_95', 0):.0f}<br>"
         f"Max DD: {result_metrics.get('max_drawdown', 0):.2f} | "
-        f"PF: {result_metrics.get('profit_factor', 0):.2f}"
+        f"PF: {result_metrics.get('profit_factor', 0):.2f} | "
+        f"ROI/Margin: {result_metrics.get('roi_on_margin', 0):.1f}%"
     )
 
     # Update layout with light theme
@@ -277,28 +280,50 @@ def plot_strategy_dashboard(
         col=1,
     )
 
-    # 2. Spread
+    # 2. Spreads (tradeable)
     fig.add_trace(
         go.Scatter(
             x=plot_df["ts"],
-            y=plot_df["spread"],
+            y=plot_df["spread_long"],
             mode="lines",
-            name="Spread",
-            line=dict(color="#7B2D8E", width=1.5),
+            name="Spread Long",
+            line=dict(color="#3498DB", width=1.5),
+        ),
+        row=2,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=plot_df["ts"],
+            y=plot_df["spread_short"],
+            mode="lines",
+            name="Spread Short",
+            line=dict(color="#E74C3C", width=1.5),
         ),
         row=2,
         col=1,
     )
     fig.add_hline(y=0, line_dash="dash", line_color="#888888", row=2, col=1)
 
-    # 3. Z-Score with thresholds
+    # 3. Z-Scores with thresholds
     fig.add_trace(
         go.Scatter(
             x=plot_df["ts"],
-            y=plot_df["zscore"],
+            y=plot_df["zscore_long"],
             mode="lines",
-            name="Z-Score",
+            name="Z-Score Long",
             line=dict(color="#3498DB", width=1.5),
+        ),
+        row=3,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=plot_df["ts"],
+            y=plot_df["zscore_short"],
+            mode="lines",
+            name="Z-Score Short",
+            line=dict(color="#E74C3C", width=1.5),
         ),
         row=3,
         col=1,
@@ -368,7 +393,9 @@ def plot_strategy_dashboard(
         f"Net PnL: {result_metrics.get('net_pnl', 0):.0f} | "
         f"Trades: {result_metrics.get('num_trades', 0)} | "
         f"Win: {result_metrics.get('win_rate', 0):.1%} | "
-        f"Sharpe: {result_metrics.get('sharpe_ratio', 0):.2f}"
+        f"Sharpe: {result_metrics.get('sharpe_ratio', 0):.2f} | "
+        f"Calmar: {result_metrics.get('calmar_ratio', 0):.2f} | "
+        f"ROI/Margin: {result_metrics.get('roi_on_margin', 0):.1f}%"
     )
 
     fig.update_layout(
