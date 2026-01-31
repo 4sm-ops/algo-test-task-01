@@ -365,36 +365,36 @@ flowchart TD
     end
 
     subgraph INDICATORS["📈 Индикаторы"]
-        SYNC --> MID_B3["mid_b3 = (bid + ask) / 2"]
-        SYNC --> MID_MOEX["mid_moex = (bid + ask) / 2"]
-        MID_B3 --> SPREAD["spread = mid_b3 - mid_moex"]
-        MID_MOEX --> SPREAD
-        SPREAD --> ZSCORE["z_score = (spread - μ) / σ"]
+        SYNC --> SPREAD_LONG["spread_long = ask_b3 - bid_moex"]
+        SYNC --> SPREAD_SHORT["spread_short = bid_b3 - ask_moex"]
+        SPREAD_LONG --> ZSCORE_LONG["zscore_long = (spread_long - μ) / σ"]
+        SPREAD_SHORT --> ZSCORE_SHORT["zscore_short = (spread_short - μ) / σ"]
     end
 
     subgraph SIGNALS["🎯 Сигналы"]
-        ZSCORE --> CHECK_POS{Есть позиция?}
+        ZSCORE_LONG --> CHECK_POS{Есть позиция?}
+        ZSCORE_SHORT --> CHECK_POS
 
         CHECK_POS -->|Нет| ENTRY_CHECK{Z-score?}
-        ENTRY_CHECK -->|"> +2.0"| SHORT_SPREAD["🔴 SHORT SPREAD<br/>Sell B3, Buy MOEX"]
-        ENTRY_CHECK -->|"< -2.0"| LONG_SPREAD["🟢 LONG SPREAD<br/>Buy B3, Sell MOEX"]
-        ENTRY_CHECK -->|"-2.0 ≤ z ≤ +2.0"| NO_ACTION[Ждём сигнала]
+        ENTRY_CHECK -->|"zscore_short > +2.0"| SHORT_SPREAD["🔴 SHORT SPREAD<br/>Sell B3, Buy MOEX"]
+        ENTRY_CHECK -->|"zscore_long < -2.0"| LONG_SPREAD["🟢 LONG SPREAD<br/>Buy B3, Sell MOEX"]
+        ENTRY_CHECK -->|"в пределах ±2.0"| NO_ACTION[Ждём сигнала]
 
         CHECK_POS -->|Да| EXIT_CHECK{Условие выхода?}
-        EXIT_CHECK -->|"z < +0.5 (short)"| CLOSE_SHORT["Закрыть SHORT"]
-        EXIT_CHECK -->|"z > -0.5 (long)"| CLOSE_LONG["Закрыть LONG"]
-        EXIT_CHECK -->|"|z| > 4.0"| STOP_LOSS["⛔ STOP LOSS"]
+        EXIT_CHECK -->|"zscore_short < +0.5"| CLOSE_SHORT["Закрыть SHORT"]
+        EXIT_CHECK -->|"zscore_long > -0.5"| CLOSE_LONG["Закрыть LONG"]
+        EXIT_CHECK -->|"zscore > ±4.0"| STOP_LOSS["⛔ STOP LOSS"]
         EXIT_CHECK -->|Нет| HOLD[Держим позицию]
     end
 
-    subgraph EXECUTION["⚡ Исполнение"]
-        SHORT_SPREAD --> EXEC_SHORT["SELL B3 @ bid<br/>BUY MOEX @ ask"]
-        LONG_SPREAD --> EXEC_LONG["BUY B3 @ ask<br/>SELL MOEX @ bid"]
-        CLOSE_SHORT --> EXEC_CLOSE_S["BUY B3 @ ask<br/>SELL MOEX @ bid"]
-        CLOSE_LONG --> EXEC_CLOSE_L["SELL B3 @ bid<br/>BUY MOEX @ ask"]
+    subgraph EXECUTION["⚡ Исполнение с Latency"]
+        SHORT_SPREAD --> EXEC_SHORT["MOEX: BUY @ ask (instant)<br/>B3: SELL @ bid (+250ms)"]
+        LONG_SPREAD --> EXEC_LONG["MOEX: SELL @ bid (instant)<br/>B3: BUY @ ask (+250ms)"]
+        CLOSE_SHORT --> EXEC_CLOSE_S["MOEX: SELL @ bid (instant)<br/>B3: BUY @ ask (+250ms)"]
+        CLOSE_LONG --> EXEC_CLOSE_L["MOEX: BUY @ ask (instant)<br/>B3: SELL @ bid (+250ms)"]
         STOP_LOSS --> EXEC_STOP["Закрыть по рынку"]
 
-        EXEC_SHORT --> COMMISSION["- Комиссия 0.01%"]
+        EXEC_SHORT --> COMMISSION["Комиссия: 0.10 BRL × 4"]
         EXEC_LONG --> COMMISSION
         EXEC_CLOSE_S --> COMMISSION
         EXEC_CLOSE_L --> COMMISSION
@@ -402,15 +402,16 @@ flowchart TD
     end
 
     subgraph METRICS["📉 Метрики"]
-        COMMISSION --> PNL["PnL"]
+        COMMISSION --> PNL["PnL (points)"]
         PNL --> EQUITY["Equity Curve"]
-        EQUITY --> RESULTS["Sharpe, MDD,<br/>Win Rate, PF"]
+        EQUITY --> RESULTS["Sharpe, Calmar, VaR 95%,<br/>ROI on Margin"]
     end
 
     NO_ACTION --> NEXT[Следующий тик]
     HOLD --> NEXT
     RESULTS --> NEXT
-    NEXT --> ZSCORE
+    NEXT --> ZSCORE_LONG
+    NEXT --> ZSCORE_SHORT
 
     style SHORT_SPREAD fill:#ffcccc
     style LONG_SPREAD fill:#ccffcc
@@ -424,14 +425,14 @@ flowchart TD
 stateDiagram-v2
     [*] --> FLAT: Старт
 
-    FLAT --> LONG_SPREAD: z < -2.0
-    FLAT --> SHORT_SPREAD: z > +2.0
+    FLAT --> LONG_SPREAD: zscore_long < -2.0
+    FLAT --> SHORT_SPREAD: zscore_short > +2.0
 
-    LONG_SPREAD --> FLAT: z > -0.5 (profit)
-    LONG_SPREAD --> FLAT: |z| > 4.0 (stop-loss)
+    LONG_SPREAD --> FLAT: zscore_long > -0.5 (profit)
+    LONG_SPREAD --> FLAT: zscore_short > 4.0 (stop-loss)
 
-    SHORT_SPREAD --> FLAT: z < +0.5 (profit)
-    SHORT_SPREAD --> FLAT: |z| > 4.0 (stop-loss)
+    SHORT_SPREAD --> FLAT: zscore_short < +0.5 (profit)
+    SHORT_SPREAD --> FLAT: zscore_long < -4.0 (stop-loss)
 
     note right of FLAT
         Нет открытых позиций
@@ -439,17 +440,17 @@ stateDiagram-v2
     end note
 
     note right of LONG_SPREAD
-        Long B3 + Short MOEX
-        Ждём роста спреда
+        Buy B3 @ ask (+250ms)
+        Sell MOEX @ bid (instant)
     end note
 
     note left of SHORT_SPREAD
-        Short B3 + Long MOEX
-        Ждём сужения спреда
+        Sell B3 @ bid (+250ms)
+        Buy MOEX @ ask (instant)
     end note
 ```
 
-### Схема расчёта Z-score
+### Схема расчёта двойных спредов и Z-score
 
 ```mermaid
 flowchart LR
@@ -460,30 +461,31 @@ flowchart LR
         MOEX_ASK[ask_moex]
     end
 
-    subgraph MID["Mid-price"]
-        B3_BID --> MID_B3["(bid + ask) / 2"]
-        B3_ASK --> MID_B3
-        MOEX_BID --> MID_MOEX["(bid + ask) / 2"]
-        MOEX_ASK --> MID_MOEX
-    end
-
-    subgraph SPREAD_CALC["Спред"]
-        MID_B3 --> SPREAD["spread = mid_b3 - mid_moex"]
-        MID_MOEX --> SPREAD
+    subgraph SPREADS["Tradeable Spreads"]
+        B3_ASK --> SPREAD_LONG["spread_long =<br/>ask_b3 - bid_moex"]
+        MOEX_BID --> SPREAD_LONG
+        B3_BID --> SPREAD_SHORT["spread_short =<br/>bid_b3 - ask_moex"]
+        MOEX_ASK --> SPREAD_SHORT
     end
 
     subgraph ROLLING["Rolling (N=1000)"]
-        SPREAD --> MEAN["μ = mean(spread)"]
-        SPREAD --> STD["σ = std(spread)"]
+        SPREAD_LONG --> MEAN_L["μ_long"]
+        SPREAD_LONG --> STD_L["σ_long"]
+        SPREAD_SHORT --> MEAN_S["μ_short"]
+        SPREAD_SHORT --> STD_S["σ_short"]
     end
 
-    subgraph ZSCORE_CALC["Z-score"]
-        SPREAD --> Z["z = (spread - μ) / σ"]
-        MEAN --> Z
-        STD --> Z
+    subgraph ZSCORE_CALC["Z-scores"]
+        SPREAD_LONG --> Z_LONG["zscore_long =<br/>(spread_long - μ) / σ"]
+        MEAN_L --> Z_LONG
+        STD_L --> Z_LONG
+        SPREAD_SHORT --> Z_SHORT["zscore_short =<br/>(spread_short - μ) / σ"]
+        MEAN_S --> Z_SHORT
+        STD_S --> Z_SHORT
     end
 
-    Z --> SIGNAL{{"Торговый сигнал"}}
+    Z_LONG --> SIGNAL_LONG{{"LONG: zscore_long < -2"}}
+    Z_SHORT --> SIGNAL_SHORT{{"SHORT: zscore_short > +2"}}
 ```
 
 ---
