@@ -27,17 +27,23 @@ def create_wdo_chart(csv_path: str, output_path: str):
     wdof25 = df[df['symbol'] == 'WDOF25'].copy()
 
     # Determine price column (TOB format or simple)
-    if 'mid_price' in df.columns:
+    # Priority: mid_price > best_bid > best_ask > price
+    if 'mid_price' in df.columns and df['mid_price'].notna().any():
         price_col = 'mid_price'
     elif 'best_bid' in df.columns:
-        # Use mid of bid/ask if available
-        wdoz24['price'] = (wdoz24['best_bid'].fillna(0) + wdoz24['best_ask'].fillna(0)) / 2
-        wdoz24.loc[wdoz24['price'] == 0, 'price'] = wdoz24['best_bid'].fillna(wdoz24['best_ask'])
-        wdof25['price'] = (wdof25['best_bid'].fillna(0) + wdof25['best_ask'].fillna(0)) / 2
-        wdof25.loc[wdof25['price'] == 0, 'price'] = wdof25['best_bid'].fillna(wdof25['best_ask'])
+        # Use mid_price if available, fallback to best_bid, then best_ask
+        for data in [wdoz24, wdof25]:
+            if 'mid_price' in data.columns:
+                data['price'] = data['mid_price'].fillna(data['best_bid']).fillna(data.get('best_ask', pd.Series()))
+            else:
+                data['price'] = data['best_bid'].fillna(data.get('best_ask', pd.Series()))
         price_col = 'price'
     else:
         price_col = 'price'
+
+    # Filter out rows with no valid price
+    wdoz24 = wdoz24[wdoz24[price_col].notna()] if price_col in wdoz24.columns else wdoz24
+    wdof25 = wdof25[wdof25[price_col].notna()] if price_col in wdof25.columns else wdof25
 
     fig = make_subplots(
         rows=2, cols=1,

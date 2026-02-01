@@ -220,6 +220,164 @@ if momentum < 0 or volatility > stop_vol:
 
 ---
 
+## Диаграмма алгоритма
+
+### Общий pipeline расчёта индикаторов
+
+```mermaid
+flowchart TD
+    subgraph INPUT["📊 Входные данные"]
+        CSV[(quotes.csv)] --> LOAD[Загрузка CSV]
+        LOAD --> CLEAN[Очистка данных]
+        CLEAN --> FILTER[Фильтрация symbol]
+    end
+
+    subgraph PRICE["💰 Расчёт цены"]
+        FILTER --> BID[bid_price]
+        FILTER --> ASK[ask_price]
+        BID --> MID["mid = (bid + ask) / 2"]
+        ASK --> MID
+    end
+
+    subgraph RETURNS["📈 Доходности"]
+        MID --> LOG_RET["log_return = ln(mid[t] / mid[t-1])"]
+        LOG_RET --> RET_SQ["returns² = log_return²"]
+    end
+
+    subgraph VOLATILITY["🔥 Волатильность"]
+        RET_SQ --> RV_50["RV(50) = √Σreturns²"]
+        RET_SQ --> RV_200["RV(200) = √Σreturns²"]
+        RET_SQ --> RV_1000["RV(1000) = √Σreturns²"]
+        RET_SQ --> EWMA["EWMA: σ²[t] = λσ²[t-1] + (1-λ)r²[t]"]
+    end
+
+    subgraph MOMENTUM["🚀 Моментум"]
+        MID --> ROC_50["ROC(50) = price[t]/price[t-50] - 1"]
+        MID --> ROC_200["ROC(200) = price[t]/price[t-200] - 1"]
+        MID --> ROC_1000["ROC(1000) = price[t]/price[t-1000] - 1"]
+        MID --> MOM_50["Mom(50) = price[t] - price[t-50]"]
+        MID --> MOM_200["Mom(200) = price[t] - price[t-200]"]
+        MID --> MOM_1000["Mom(1000) = price[t] - price[t-1000]"]
+    end
+
+    subgraph OUTPUT["📊 Выход"]
+        RV_50 --> DASHBOARD[Dashboard HTML]
+        RV_200 --> DASHBOARD
+        RV_1000 --> DASHBOARD
+        EWMA --> DASHBOARD
+        ROC_50 --> DASHBOARD
+        ROC_200 --> DASHBOARD
+        ROC_1000 --> DASHBOARD
+        MOM_50 --> DASHBOARD
+        MOM_200 --> DASHBOARD
+        MOM_1000 --> DASHBOARD
+        DASHBOARD --> SUMMARY[Summary Report]
+    end
+
+    style RV_50 fill:#ffcccc
+    style RV_200 fill:#ffcccc
+    style RV_1000 fill:#ffcccc
+    style EWMA fill:#ffcccc
+    style ROC_50 fill:#ccffcc
+    style ROC_200 fill:#ccffcc
+    style ROC_1000 fill:#ccffcc
+    style MOM_50 fill:#cceeff
+    style MOM_200 fill:#cceeff
+    style MOM_1000 fill:#cceeff
+```
+
+### Расчёт волатильности (детально)
+
+```mermaid
+flowchart LR
+    subgraph RV["Realized Volatility"]
+        direction TB
+        R1[returns] --> R2["returns²"]
+        R2 --> R3["rolling_sum(N)"]
+        R3 --> R4["√sum"]
+        R4 --> RV_OUT[RV]
+    end
+
+    subgraph EWMA_CALC["EWMA Volatility"]
+        direction TB
+        E1[returns²] --> E2["ewm(λ=0.94)"]
+        E2 --> E3["√variance"]
+        E3 --> EWMA_OUT[EWMA]
+    end
+
+    RV_OUT --> COMPARE{Сравнение}
+    EWMA_OUT --> COMPARE
+    COMPARE --> INSIGHT["EWMA более гладкая,<br/>быстрее адаптируется"]
+```
+
+### Расчёт моментума (детально)
+
+```mermaid
+flowchart LR
+    subgraph ROC_CALC["Rate of Change (%)"]
+        direction TB
+        P1[price] --> P2["price.shift(N)"]
+        P1 --> DIV["price / shifted"]
+        P2 --> DIV
+        DIV --> SUB["- 1"]
+        SUB --> ROC_OUT["ROC (%)"]
+    end
+
+    subgraph MOM_CALC["Simple Momentum (pts)"]
+        direction TB
+        M1[price] --> M2["price.shift(N)"]
+        M1 --> DIFF["price - shifted"]
+        M2 --> DIFF
+        DIFF --> MOM_OUT["Momentum (pts)"]
+    end
+
+    ROC_OUT --> INTERPRET{Интерпретация}
+    MOM_OUT --> INTERPRET
+    INTERPRET --> |"ROC > 0"| BULLISH["🟢 Бычий тренд"]
+    INTERPRET --> |"ROC < 0"| BEARISH["🔴 Медвежий тренд"]
+    INTERPRET --> |"ROC ≈ 0"| FLAT["⚪ Флэт"]
+```
+
+### Применение в торговом роботе (400 мс)
+
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE: Старт
+
+    IDLE --> CHECK_VOL: Новый тик
+
+    CHECK_VOL --> HIGH_VOL: EWMA > 95th percentile
+    CHECK_VOL --> NORMAL_VOL: EWMA в норме
+
+    HIGH_VOL --> REDUCE_SIZE: Уменьшить позицию
+    REDUCE_SIZE --> CHECK_MOM
+
+    NORMAL_VOL --> CHECK_MOM: Стандартный размер
+
+    CHECK_MOM --> LONG: ROC > threshold
+    CHECK_MOM --> SHORT: ROC < -threshold
+    CHECK_MOM --> IDLE: |ROC| < threshold
+
+    LONG --> EXECUTE: Выставить BUY
+    SHORT --> EXECUTE: Выставить SELL
+
+    EXECUTE --> IDLE: Ордер отправлен (< 400 мс)
+
+    note right of HIGH_VOL
+        Высокая волатильность:
+        - Увеличить пороги
+        - Уменьшить размер
+        - Шире стопы
+    end note
+
+    note right of CHECK_MOM
+        Autocorr > 0: trend-following
+        Autocorr < 0: mean-reversion
+    end note
+```
+
+---
+
 ## Ссылки
 
 - [RiskMetrics EWMA](https://www.msci.com/documents/10199/5915b101-4206-4ba0-aee2-3449d5c7e95a) — оригинальная документация по EWMA

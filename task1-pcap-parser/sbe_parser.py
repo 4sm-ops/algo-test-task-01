@@ -518,16 +518,19 @@ def main():
 
     # Step 5: Extract WDO prices for visualization
     print("\n[5/5] Creating WDO price time series...")
-    # Use mid_price from TOB if available, otherwise fall back to order prices
+    # Use mid_price from TOB if available, fallback to best_bid, then order prices
     if len(tob_df) > 0:
         wdo_prices = tob_df[tob_df['symbol'].str.startswith('WDO')].copy()
-        wdo_prices = wdo_prices[['timestamp_ns', 'timestamp_s', 'security_id', 'symbol', 'mid_price', 'spread']]
-        wdo_prices = wdo_prices.rename(columns={'mid_price': 'price'})
+        # Use mid_price if available, otherwise use best_bid
+        wdo_prices['price'] = wdo_prices['mid_price'].fillna(wdo_prices['best_bid'])
+        wdo_prices = wdo_prices[['timestamp_ns', 'timestamp_s', 'security_id', 'symbol', 'price', 'spread']]
     else:
         wdo_prices = incremental_df[incremental_df['symbol'].str.startswith('WDO')].copy()
         wdo_prices = wdo_prices[['timestamp_ns', 'timestamp_s', 'security_id', 'symbol', 'price']]
 
     if len(wdo_prices) > 0:
+        # Filter out rows with no price
+        wdo_prices = wdo_prices[wdo_prices['price'].notna()]
         save_csv(wdo_prices, str(OUTPUT_DIR / 'wdo_prices_sbe.csv'))
 
     # Summary

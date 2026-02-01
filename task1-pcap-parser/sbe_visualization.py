@@ -28,6 +28,14 @@ def create_wdo_chart_sbe(csv_path: str, output_path: str):
     df['datetime'] = pd.to_datetime(df['timestamp_s'], unit='s')
     df = df.sort_values('timestamp_ns')
 
+    # Ensure we have a price column - fallback to best_bid if price is empty
+    if 'price' not in df.columns or df['price'].isna().all():
+        if 'best_bid' in df.columns:
+            print("  Note: Using best_bid as price (mid_price unavailable)")
+            df['price'] = df['best_bid']
+        elif 'mid_price' in df.columns:
+            df['price'] = df['mid_price']
+
     # Get data by symbol
     wdoz24 = df[df['symbol'] == 'WDOZ24'].copy()
     wdof25 = df[df['symbol'] == 'WDOF25'].copy()
@@ -45,6 +53,13 @@ def create_wdo_chart_sbe(csv_path: str, output_path: str):
         ),
         row_heights=[0.6, 0.4]
     )
+
+    # Filter out rows with NaN prices
+    wdoz24 = wdoz24[wdoz24['price'].notna()]
+    wdof25 = wdof25[wdof25['price'].notna()] if 'price' in wdof25.columns else wdof25
+
+    print(f"  WDOZ24 (with valid prices): {len(wdoz24)} points")
+    print(f"  WDOF25 (with valid prices): {len(wdof25)} points")
 
     # Panel 1: WDOZ24 price
     if len(wdoz24) > 0:
