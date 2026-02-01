@@ -3,17 +3,24 @@
 B3 UMDF Binary PCAP Parser.
 
 Parses PCAP files from B3 exchange and extracts market data.
+Reconstructs order book from Order_MBO messages.
 Prices are stored with 2 decimal places (multiplier 100).
 """
 
 import struct
 import re
+import sys
 from dataclasses import dataclass
-from typing import Iterator, Dict, List, Tuple, Set
+from typing import Iterator, Dict, List, Tuple, Set, Optional
 from pathlib import Path
+
+# Add parent directory for order_book import
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scapy.all import PcapReader
 from scapy.layers.inet import IP, UDP
+
+from order_book import OrderBookManager, TopOfBook
 
 
 PRICE_MULTIPLIER = 100
@@ -130,13 +137,20 @@ def parse_snapshot(pcap_path: str, instruments: Dict[int, SecurityDefinition],
 
 def parse_incremental(pcap_path: str, instruments: Dict[int, SecurityDefinition],
                       price_range: Tuple[float, float] = (5000, 7000),
-                      max_packets: int = None) -> List[MDEntry]:
+                      max_packets: int = None) -> Tuple[List[MDEntry], List[TopOfBook]]:
     """
-    Extract prices from incremental feed.
+    Extract prices from incremental feed and reconstruct order book.
+
+    Returns:
+        Tuple of (entries, tob_snapshots)
     """
     entries = []
     seen = set()
     packet_count = 0
+    next_order_id = 1
+
+    # Order book manager for reconstruction
+    ob_manager = OrderBookManager()
 
     # Pre-compute byte patterns
     id_bytes = {sec_id: struct.pack('<Q', sec_id) for sec_id in instruments}
@@ -145,6 +159,9 @@ def parse_incremental(pcap_path: str, instruments: Dict[int, SecurityDefinition]
         if max_packets and packet_count >= max_packets:
             break
         packet_count += 1
+
+        if packet_count % 100000 == 0:
+            print(f"  {packet_count:,} packets, {len(entries):,} orders...")
 
         # Skip heartbeat messages (msg_type 334)
         msg_type = struct.unpack('<H', payload[0:2])[0]
@@ -159,6 +176,17 @@ def parse_incremental(pcap_path: str, instruments: Dict[int, SecurityDefinition]
             idx = payload.find(pattern)
             if idx < 0:
                 continue
+
+            # Try to determine side from mDEntryType byte
+            # mDEntryType is typically 1 byte after price data
+            # '0' = BID, '1' = OFFER
+            side = 'BID'  # default
+            for type_offset in [4, 5, 6, 7]:
+                if idx + type_offset < len(payload):
+                    type_byte = payload[idx + type_offset:idx + type_offset + 1]
+                    if type_byte == b'1':
+                        side = 'OFFER'
+                        break
 
             # Look for price after SecurityID
             for offset in [8, 12, 16, 20, 24, 28, 32]:
@@ -176,13 +204,29 @@ def parse_incremental(pcap_path: str, instruments: Dict[int, SecurityDefinition]
                             timestamp_ns=timestamp_ns,
                             security_id=sec_id,
                             symbol=instruments[sec_id].symbol,
-                            entry_type='UPDATE',
+                            entry_type=side,
                             price=price,
-                            size=0
+                            size=1
                         ))
+
+                        # Update order book
+                        ob_manager.process_order(
+                            security_id=sec_id,
+                            symbol=instruments[sec_id].symbol,
+                            order_id=next_order_id,
+                            action='NEW',
+                            side=side,
+                            price=price,
+                            size=1,
+                            timestamp_ns=timestamp_ns
+                        )
+                        next_order_id += 1
                     break
 
-    return entries
+    print(f"  Total: {packet_count:,} packets, {len(entries):,} orders, "
+          f"{len(ob_manager.tob_history):,} TOB updates")
+
+    return entries, ob_manager.get_all_tob()
 
 
 def entries_to_csv(entries: List[MDEntry], output_path: str):
@@ -211,14 +255,44 @@ def entries_to_csv(entries: List[MDEntry], output_path: str):
     print(f"Wrote {len(df)} rows to {output_path}")
 
 
+def tob_to_csv(tob_list: List[TopOfBook], output_path: str):
+    """Write top-of-book snapshots to CSV file."""
+    import pandas as pd
+
+    if not tob_list:
+        print(f"No TOB snapshots to write to {output_path}")
+        return
+
+    df = pd.DataFrame([
+        {
+            'timestamp_ns': t.timestamp_ns,
+            'timestamp_s': t.timestamp_ns / 1e9,
+            'security_id': t.security_id,
+            'symbol': t.symbol,
+            'best_bid': t.best_bid_price,
+            'best_bid_size': t.best_bid_size,
+            'best_ask': t.best_ask_price,
+            'best_ask_size': t.best_ask_size,
+            'spread': t.spread,
+            'mid_price': t.mid_price
+        }
+        for t in tob_list
+    ])
+
+    df = df.sort_values('timestamp_ns').reset_index(drop=True)
+    df.to_csv(output_path, index=False)
+    print(f"Wrote {len(df)} TOB snapshots to {output_path}")
+
+
 if __name__ == '__main__':
     import pandas as pd
 
-    base_path = Path('/Users/rustamabdullin/personal/algo-test-task-01/task1-pcap-parser/20241118')
-    output_path = Path('/Users/rustamabdullin/personal/algo-test-task-01/task1-pcap-parser/output')
+    base_path = Path(__file__).parent.parent / '20241118'
+    output_path = Path(__file__).parent.parent / 'output'
+    output_path.mkdir(exist_ok=True)
 
     print("=" * 60)
-    print("B3 PCAP Parser")
+    print("B3 PCAP Parser (with Order Book Reconstruction)")
     print("=" * 60)
 
     # Parse instruments
@@ -242,17 +316,20 @@ if __name__ == '__main__':
     # Save snapshot CSV
     entries_to_csv(snapshot_entries, str(output_path / 'snapshot.csv'))
 
-    # Parse incremental (limited for speed)
+    # Parse incremental with order book reconstruction
     print("\n3. Parsing incremental feed (first 100k packets)...")
-    update_entries = parse_incremental(
+    update_entries, tob_snapshots = parse_incremental(
         str(base_path / '78_Incremental_feedA.pcap'),
         wdo_futures,
         max_packets=100000
     )
-    print(f"   Found {len(update_entries)} update entries")
 
     # Save updates CSV
     entries_to_csv(update_entries, str(output_path / 'updates.csv'))
+
+    # Save TOB snapshots
+    print("\n4. Saving top-of-book snapshots...")
+    tob_to_csv(tob_snapshots, str(output_path / 'orderbook_tob.csv'))
 
     # Summary
     print("\n" + "=" * 60)
@@ -272,3 +349,10 @@ if __name__ == '__main__':
         for symbol in df['symbol'].unique():
             prices = df[df['symbol'] == symbol]['price']
             print(f"  {symbol}: min={prices.min():.2f}, max={prices.max():.2f}, count={len(prices)}")
+
+    if tob_snapshots:
+        print(f"\nTop-of-book snapshots: {len(tob_snapshots)}")
+        tob_df = pd.DataFrame([{'symbol': t.symbol} for t in tob_snapshots])
+        for symbol in tob_df['symbol'].unique():
+            count = len(tob_df[tob_df['symbol'] == symbol])
+            print(f"  {symbol}: {count} snapshots")
