@@ -120,7 +120,8 @@ def prepare_synchronized_data(
     # Drop rows where we don't have both symbols yet
     merged = merged.dropna(subset=price_cols)
 
-    # Calculate mid prices
+    # Mid-prices — only for visualization and summary stats, NOT used in trading logic.
+    # Trading uses tradeable spreads: spread_long = ask_b3 - bid_moex, spread_short = bid_b3 - ask_moex
     merged["mid_b3"] = (merged["bid_b3"] + merged["ask_b3"]) / 2
     merged["mid_moex"] = (merged["bid_moex"] + merged["ask_moex"]) / 2
 
