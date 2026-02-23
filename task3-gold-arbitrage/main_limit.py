@@ -22,6 +22,7 @@ from src.data_loader import load_quotes, prepare_synchronized_data, get_data_sum
 from src.indicators import add_indicators
 from src.backtest import Backtest
 from src.backtest_limit import BacktestLimit
+from src.visualization import plot_equity_plotly, plot_strategy_dashboard
 
 
 def print_section(title: str) -> None:
@@ -216,6 +217,42 @@ def main():
         trades_path = output_dir / "trades_limit.csv"
         trades_df.to_csv(trades_path, index=False)
         print(f"Limit trades saved to: {trades_path}")
+
+    # ==========================================
+    # GENERATE INTERACTIVE CHARTS (limit version)
+    # ==========================================
+    print_section("GENERATING CHARTS")
+
+    limit_metrics = {
+        "net_pnl": result_limit.net_pnl,
+        "num_trades": result_limit.num_trades,
+        "win_rate": result_limit.win_rate,
+        "sharpe_ratio": result_limit.sharpe_ratio,
+        "max_drawdown": result_limit.max_drawdown,
+        "profit_factor": result_limit.profit_factor,
+        "calmar_ratio": result_limit.calmar_ratio,
+        "var_95": result_limit.var_95,
+        "roi_on_margin": result_limit.roi_on_margin,
+    }
+
+    plot_equity_plotly(
+        df=df,
+        equity_curve=result_limit.equity_curve,
+        config=config,
+        result_metrics=limit_metrics,
+        output_path=output_dir / "equity_interactive_limit.html",
+        title="Gold Arbitrage Strategy (Limit Orders) - Equity Curve",
+    )
+    print(f"Interactive equity chart saved to: {output_dir / 'equity_interactive_limit.html'}")
+
+    plot_strategy_dashboard(
+        df=df,
+        equity_curve=result_limit.equity_curve,
+        config=config,
+        result_metrics=limit_metrics,
+        output_path=output_dir / "strategy_dashboard_limit.html",
+    )
+    print(f"Strategy dashboard saved to: {output_dir / 'strategy_dashboard_limit.html'}")
 
     print_section("DONE")
 

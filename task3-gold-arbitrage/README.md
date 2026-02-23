@@ -210,7 +210,9 @@ task3-gold-arbitrage/
     ├── trades.csv
     ├── trades_limit.csv
     ├── equity_interactive.html
-    └── strategy_dashboard.html
+    ├── equity_interactive_limit.html
+    ├── strategy_dashboard.html
+    └── strategy_dashboard_limit.html
 ```
 
 ## Зависимости
