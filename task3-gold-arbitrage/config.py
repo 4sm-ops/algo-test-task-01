@@ -35,6 +35,12 @@ class StrategyConfig:
     margin_b3: float = 217.0  # Margin per B3 contract (~1300 BRL)
     margin_moex: float = 300.0  # Margin per MOEX contract (~30,000 RUB)
 
+    # Limit order parameters (used by backtest_limit.py)
+    limit_order_offset: float = 0.0  # Offset from mid-price (0 = at mid)
+    limit_order_timeout_ms: int = 5000  # Cancel limit order after N ms if not filled
+    limit_order_price_mode: str = "mid"  # "mid" | "passive" | "aggressive"
+    max_b3_spread_for_entry: float = 30.0  # Skip entry when B3 spread > threshold
+
 
 @dataclass
 class DataConfig:

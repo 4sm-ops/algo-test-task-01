@@ -1,6 +1,6 @@
 # Gold Arbitrage Backtest Report
 
-Generated: 2026-02-23 20:16:57
+Generated: 2026-02-23 21:11:24
 
 ## Strategy Parameters
 
