@@ -118,35 +118,18 @@ custom_config = StrategyConfig(
 - B3 avg spread: **26.34** пунктов
 - MOEX avg spread: **2.22** пункта
 
-## Структура проекта
-
-```
-task3-gold-arbitrage/
-├── config.py              # Параметры стратегии
-├── main.py                # Основной скрипт
-├── requirements.txt       # Зависимости
-├── strategy.md            # Полная документация
-├── src/
-│   ├── __init__.py
-│   ├── data_loader.py     # Загрузка CSV
-│   ├── indicators.py      # Спреды и Z-score
-│   ├── backtest.py        # Движок бэктеста
-│   └── visualization.py   # Plotly графики
-└── output/
-    ├── backtest_report.md
-    ├── backtest_results.png
-    ├── trades.csv
-    ├── equity_interactive.html
-    └── strategy_dashboard.html
-```
-
 ## Особенности реализации
 
-### Расчёт спреда по tradeable ценам
+### Расчёт спреда по tradeable ценам (не mid-price)
+
+Стратегия использует реальные торгуемые цены (bid/ask), а не теоретические mid-price. По mid-ценам невозможно исполнить сделку.
+
 ```python
-spread_long = ask_b3 - bid_moex   # для покупки спреда
-spread_short = bid_b3 - ask_moex  # для продажи спреда
+spread_long = ask_b3 - bid_moex   # цена покупки спреда
+spread_short = bid_b3 - ask_moex  # цена продажи спреда
 ```
+
+Каждый спред имеет свой Z-score (`zscore_long`, `zscore_short`).
 
 ### Моделирование latency
 - **MOEX**: мгновенное исполнение
@@ -158,9 +141,87 @@ spread_short = bid_b3 - ask_moex  # для продажи спреда
 
 ## Причины убыточности
 
-1. **Широкий спред B3** (~26 пт vs ~2 пт на MOEX) — каждая сделка теряет на crossing the spread
-2. **Latency B3** (250 мс) — дополнительный slippage
-3. **Асимметрия ликвидности** — арбитраж требует сопоставимой ликвидности
+### Корневая причина: bid-ask spread B3 съедает весь edge
+
+При каждой сделке мы пересекаем спред дважды (вход + выход):
+
+```
+Потери на вход:  spread_b3/2 + spread_moex/2 ≈ 13 + 1 = 14 пт
+Потери на выход: spread_b3/2 + spread_moex/2 ≈ 13 + 1 = 14 пт
+Итого round-trip:                                       ≈ 28 пт
+```
+
+Средний PnL на сделку: **-26.45 пт** — практически равен стоимости crossing spread. Mean-reversion сигнал работает (иначе убыток был бы больше), но прибыль от возврата спреда полностью поглощается транзакционными издержками.
+
+### Дополнительные факторы
+
+- **Latency B3** (250 мс) — дополнительный slippage при исполнении
+- **Асимметрия ликвидности** — MOEX: узкий спред, B3: широкий спред
+- **34 минуты данных** — недостаточно для статистически значимой оценки mean-reversion
+
+## Что бы я сделал иначе
+
+1. **Лимитные ордера на B3** — вместо crossing spread выставлять limit order по mid-price. Реализовано и протестировано (см. ниже).
+2. **Торговать MOEX, используя B3 как сигнал** — исполняться только на MOEX (спред 2 пт), B3 только для генерации сигналов
+3. **Увеличить порог входа до 3-4σ** — входить только при экстремальных отклонениях
+4. **Фильтр по ширине спреда B3** — торговать только в моменты высокой ликвидности (spread_b3 < 15 пт)
+5. **Больше данных** — 34 минуты недостаточно для оценки стратегии
+
+## Альтернативная стратегия: лимитные ордера
+
+Реализована альтернативная версия бэктеста с limit orders на B3 (`main_limit.py`).
+
+### Идея
+
+Вместо crossing spread — выставляем limit order по mid-price B3. MOEX исполняется market order в момент fill B3 (не в момент сигнала).
+
+### Результаты: Market vs Limit Orders
+
+| Метрика | Market Orders | Limit Orders |
+|---------|--------------|-------------|
+| Сделок | 1,590 | 17 |
+| Net PnL | -42,052 | **-40.63** |
+| Avg PnL/сделку | -26.45 | **-2.39** (11x лучше) |
+| Win rate | 0.9% | **17.6%** |
+| ROI on margin | -8,134% | **-7.9%** |
+| Fill rate | 100% | 0.02% |
+
+### Вывод
+
+Лимитные ордера улучшают экономику каждой сделки в 11 раз, но fill rate 0.02% делает стратегию неторгуемой. B3 gold futures слишком неликвидны для обоих подходов.
+
+### Запуск
+
+```bash
+python main.py        # Оригинальный бэктест (market orders)
+python main_limit.py  # Сравнение market vs limit orders
+```
+
+## Структура проекта
+
+```
+task3-gold-arbitrage/
+├── config.py              # Параметры стратегии
+├── main.py                # Основной скрипт (market orders)
+├── main_limit.py          # Сравнение market vs limit orders
+├── requirements.txt       # Зависимости
+├── strategy.md            # Полная документация
+├── src/
+│   ├── __init__.py
+│   ├── data_loader.py     # Загрузка CSV
+│   ├── indicators.py      # Спреды и Z-score
+│   ├── backtest.py        # Движок бэктеста (market orders)
+│   ├── backtest_limit.py  # Движок бэктеста (limit orders)
+│   └── visualization.py   # Plotly графики
+└── output/
+    ├── backtest_report.md
+    ├── comparison_report.md
+    ├── backtest_results.png
+    ├── trades.csv
+    ├── trades_limit.csv
+    ├── equity_interactive.html
+    └── strategy_dashboard.html
+```
 
 ## Зависимости
 
